@@ -17,10 +17,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy all PicoClaw binaries including the launcher
+# Copy all PicoClaw binaries
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
-COPY --from=builder /src/build/picoclaw-launcher /usr/local/bin/picoclaw-launcher 2>/dev/null || true
-COPY --from=builder /src/build/picoclaw-launcher-tui /usr/local/bin/picoclaw-launcher-tui 2>/dev/null || true
 
 RUN mkdir -p /data/.picoclaw && echo "v2"
 
