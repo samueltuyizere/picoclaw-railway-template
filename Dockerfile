@@ -21,7 +21,7 @@ COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
 COPY --from=builder /src/build/picoclaw-launcher /usr/local/bin/picoclaw-launcher 2>/dev/null || true
 COPY --from=builder /src/build/picoclaw-launcher-tui /usr/local/bin/picoclaw-launcher-tui 2>/dev/null || true
 
-RUN mkdir -p /data/.picoclaw
+RUN mkdir -p /data/.picoclaw && echo "v2"
 
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
