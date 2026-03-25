@@ -98,21 +98,26 @@ fi
 NGINX_PORT="${PORT:-8080}"
 sed "s/listen 8080;/listen $NGINX_PORT;/" /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
-# Kill any existing launcher process on port 18800
+# Kill any existing launcher process
 pkill -f "picoclaw-launcher" 2>/dev/null || true
 
-# Wait for port to be free (handle rapid container restarts)
-for i in $(seq 1 10); do
-    if ! ss -tln | grep -q ":18800 "; then
-        break
-    fi
-    echo "Waiting for port 18800 to be free... ($i/10)"
-    sleep 1
-done
+# Use a dynamic internal port to avoid conflicts on rapid restarts
+# The launcher doesn't need a fixed port since only nginx talks to it
+INTERNAL_PORT=$((18800 + RANDOM % 100))
+echo "Starting launcher on internal port $INTERNAL_PORT"
 
 # Start the launcher on localhost only (nginx proxies to it)
-picoclaw-launcher -port 18800 &
+picoclaw-launcher -port $INTERNAL_PORT &
 LAUNCHER_PID=$!
+
+# Wait for launcher to start
+sleep 2
+
+# Update nginx config with the correct ports
+NGINX_PORT="${PORT:-8080}"
+sed -e "s/listen 8080;/listen $NGINX_PORT;/" \
+    -e "s/server 127.0.0.1:18800/server 127.0.0.1:$INTERNAL_PORT/" \
+    /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 # Start nginx as the public-facing proxy with basic auth
 nginx -g 'daemon off;' &
