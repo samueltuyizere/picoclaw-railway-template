@@ -1,13 +1,19 @@
 FROM golang:1.25-alpine AS builder
 
 # Rebuild v5 - complete launcher with web frontend
-RUN apk add --no-cache git make nodejs npm bash pnpm
+RUN apk add --no-cache git make nodejs npm bash pnpm patch
 
 WORKDIR /src
 
 ARG PICOCLAW_VERSION=main
 
 RUN git clone --depth 1 --branch ${PICOCLAW_VERSION} https://github.com/samueltuyizere/picoclaw.git .
+
+# Patch the launcher to not include port in WebSocket URL when behind reverse proxy
+# This fixes Railway 502 errors on WebSocket connections
+COPY gateway_host.patch /tmp/gateway_host.patch
+RUN patch -p1 < /tmp/gateway_host.patch || true
+
 RUN go mod download
 RUN make build
 RUN make build-launcher
