@@ -7,6 +7,7 @@ import secrets
 import signal
 import time
 from collections import deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -373,11 +374,17 @@ routes = [
     Route("/api/gateway/restart", api_gateway_restart, methods=["POST"]),
 ]
 
+@asynccontextmanager
+async def lifespan(app):
+    await auto_start_gateway()
+    yield
+    await gateway.stop()
+
+
 app = Starlette(
     routes=routes,
     middleware=[Middleware(AuthenticationMiddleware, backend=BasicAuthBackend())],
-    on_startup=[auto_start_gateway],
-    on_shutdown=[gateway.stop],
+    lifespan=lifespan,
 )
 
 
