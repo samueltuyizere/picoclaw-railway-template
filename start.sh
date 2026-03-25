@@ -98,6 +98,10 @@ fi
 NGINX_PORT="${PORT:-8080}"
 sed "s/listen 8080;/listen $NGINX_PORT;/" /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
+# Kill any existing launcher process on port 18800
+pkill -f "picoclaw-launcher" 2>/dev/null || true
+sleep 1
+
 # Start the launcher on localhost only (nginx proxies to it)
 picoclaw-launcher -port 18800 &
 LAUNCHER_PID=$!
