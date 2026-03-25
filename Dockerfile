@@ -6,7 +6,7 @@ WORKDIR /src
 
 ARG PICOCLAW_VERSION=main
 
-RUN git clone --depth 1 --branch ${PICOCLAW_VERSION} https://github.com/sipeed/picoclaw.git .
+RUN git clone --depth 1 --branch ${PICOCLAW_VERSION} https://github.com/samueltuyizere/picoclaw.git .
 RUN go mod download
 RUN make build
 
