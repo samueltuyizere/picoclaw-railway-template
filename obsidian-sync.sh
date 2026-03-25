@@ -18,12 +18,16 @@ if [ -n "$GITHUB_TOKEN" ] && [ -n "$REPO_URL" ]; then
     
     if [ ! -d "$OBSIDIAN_DIR/.git" ]; then
         echo "Cloning Obsidian vault..."
-        git clone "$AUTH_URL" "$OBSIDIAN_DIR" || {
-            echo "Failed to clone, creating empty repo"
+        git clone "$AUTH_URL" "$OBSIDIAN_DIR" 2>&1 || {
+            echo "Clone failed, trying to initialize and fetch..."
             mkdir -p "$OBSIDIAN_DIR"
             cd "$OBSIDIAN_DIR"
             git init
             git remote add origin "$AUTH_URL"
+            git fetch origin
+            # Checkout whatever the default branch is
+            DEFAULT_BRANCH=$(git branch -r | head -1 | sed 's/.*origin\///')
+            git checkout -b "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
         }
     else
         echo "Obsidian vault already exists, updating remote..."
@@ -39,12 +43,15 @@ fi
 sync_vault() {
     cd "$OBSIDIAN_DIR"
     
+    # Detect default branch
+    DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "master")
+    
     # Pull latest changes
-    echo "[$(date)] Pulling latest changes..."
+    echo "[$(date)] Pulling latest changes from $DEFAULT_BRANCH..."
     git fetch origin
-    git merge origin/main --ff-only 2>/dev/null || {
-        echo "Merge conflict or diverged branches, resetting to origin/main"
-        git reset --hard origin/main
+    git merge "origin/$DEFAULT_BRANCH" --ff-only 2>/dev/null || {
+        echo "Merge conflict or diverged branches, resetting to origin/$DEFAULT_BRANCH"
+        git reset --hard "origin/$DEFAULT_BRANCH"
     }
     
     # Check for local changes
@@ -52,10 +59,10 @@ sync_vault() {
         echo "[$(date)] Committing local changes..."
         git add -A
         git commit -m "Auto-sync from PicoClaw ($(date -Iminutes))" || true
-        git push origin main || {
+        git push origin "$DEFAULT_BRANCH" || {
             echo "Push failed, pulling and retrying..."
-            git pull --rebase origin main
-            git push origin main
+            git pull --rebase origin "$DEFAULT_BRANCH"
+            git push origin "$DEFAULT_BRANCH"
         }
         echo "[$(date)] Pushed changes to GitHub"
     else
