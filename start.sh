@@ -76,10 +76,38 @@ fi
 
 sync_channel_env_to_security
 
-# Use Railway's PORT if available, otherwise default to 18800
-LAUNCHER_PORT="${PORT:-18800}"
+# Set up HTTP Basic Auth for the web UI
+# Uses AUTH_USERNAME and AUTH_PASSWORD env vars (defaults provided)
+AUTH_USER="${AUTH_USERNAME:-admin}"
+AUTH_PASS="${AUTH_PASSWORD:-$(openssl rand -base64 12)}"
+echo "Setting up Basic Auth: user=$AUTH_USER"
+echo "$AUTH_USER:$(openssl passwd -apr1 "$AUTH_PASS")" > /etc/nginx/.htpasswd
 
-# Start the launcher web console (includes gateway management)
-# -public flag makes it listen on 0.0.0.0 (required for Railway)
-# -port flag sets the port (Railway assigns dynamic PORT)
-exec picoclaw-launcher -public -port "$LAUNCHER_PORT"
+# Print password on first startup (check Railway logs to see it)
+if [ ! -f /data/.picoclaw/.auth_printed ]; then
+    echo "============================================"
+    echo "PicoClaw Web UI Credentials:"
+    echo "  Username: $AUTH_USER"
+    echo "  Password: $AUTH_PASS"
+    echo "============================================"
+    echo "Set AUTH_USERNAME and AUTH_PASSWORD env vars to customize."
+    touch /data/.picoclaw/.auth_printed
+fi
+
+# Update nginx config with the correct port
+NGINX_PORT="${PORT:-8080}"
+sed "s/listen 8080;/listen $NGINX_PORT;/" /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+
+# Start the launcher on localhost only (nginx proxies to it)
+picoclaw-launcher -port 18800 &
+LAUNCHER_PID=$!
+
+# Start nginx as the public-facing proxy with basic auth
+nginx -g 'daemon off;' &
+NGINX_PID=$!
+
+# Handle shutdown gracefully
+trap "kill $LAUNCHER_PID $NGINX_PID 2>/dev/null; exit 0" SIGTERM SIGINT
+
+# Wait for either process to exit
+wait -n $LAUNCHER_PID $NGINX_PID
