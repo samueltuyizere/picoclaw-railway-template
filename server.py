@@ -352,6 +352,15 @@ class GatewayManager:
                     LOG_BUFFER.append(f"[{_ts()}] {cleaned}")
         except asyncio.CancelledError:
             return
+        # Drain any remaining buffered output (process may have exited before
+        # readline could yield all lines, especially on fast crashes)
+        if self.process and self.process.stdout:
+            remaining = await self.process.stdout.read()
+            if remaining:
+                for line in remaining.decode("utf-8", errors="replace").splitlines():
+                    cleaned = ANSI_ESCAPE.sub("", line).rstrip()
+                    if cleaned:
+                        LOG_BUFFER.append(f"[{_ts()}] {cleaned}")
         if self.process and self.process.returncode is not None and self.state == "running":
             code = self.process.returncode
             uptime = int(time.time() - self.start_time) if self.start_time else 0
