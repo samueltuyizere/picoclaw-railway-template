@@ -1,7 +1,7 @@
 FROM golang:1.25-alpine AS builder
 
-# Rebuild v4 - complete launcher support
-RUN apk add --no-cache git make nodejs npm bash
+# Rebuild v5 - complete launcher with web frontend
+RUN apk add --no-cache git make nodejs npm bash pnpm
 
 WORKDIR /src
 
@@ -10,6 +10,7 @@ ARG PICOCLAW_VERSION=main
 RUN git clone --depth 1 --branch ${PICOCLAW_VERSION} https://github.com/samueltuyizere/picoclaw.git .
 RUN go mod download
 RUN make build
+RUN make build-launcher
 
 FROM debian:bookworm-slim
 
