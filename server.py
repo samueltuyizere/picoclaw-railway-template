@@ -66,9 +66,14 @@ class _BufferLogHandler(logging.Handler):
 # Set up root logger to capture server-level logs (config errors, startup, etc.)
 _root_logger = logging.getLogger()
 _root_logger.setLevel(logging.DEBUG)
+_log_fmt = logging.Formatter("%(levelname)s %(name)s: %(message)s")
 _buffer_handler = _BufferLogHandler()
-_buffer_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+_buffer_handler.setFormatter(_log_fmt)
 _root_logger.addHandler(_buffer_handler)
+# Also log to stderr so Railway/log aggregators can see app-level messages
+_stderr_handler = logging.StreamHandler()
+_stderr_handler.setFormatter(_log_fmt)
+_root_logger.addHandler(_stderr_handler)
 # Reduce noise from third-party loggers
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
@@ -297,6 +302,12 @@ class GatewayManager:
         self.state = "starting"
         _append_log(f"Starting gateway (restart #{self.restart_count})...")
         try:
+            # Write the resolved config (with env overrides) to disk so the
+            # gateway subprocess can read it — it doesn't share our memory.
+            resolved = load_config()
+            save_config(resolved)
+            logging.info("Wrote resolved config to %s for gateway subprocess", CONFIG_PATH)
+
             self.process = await asyncio.create_subprocess_exec(
                 "picoclaw", "gateway",
                 stdout=asyncio.subprocess.PIPE,

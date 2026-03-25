@@ -9,4 +9,5 @@ if [ ! -f /data/.picoclaw/config.json ]; then
     picoclaw onboard
 fi
 
+export PICOCLAW_HOME=/data/.picoclaw
 exec python /app/server.py
