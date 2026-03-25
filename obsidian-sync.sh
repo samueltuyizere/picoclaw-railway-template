@@ -13,17 +13,19 @@ git config --global init.defaultBranch main
 
 # Clone repo if token is provided
 if [ -n "$GITHUB_TOKEN" ] && [ -n "$REPO_URL" ]; then
-    # Inject token into URL for auth
-    AUTH_URL=$(echo "$REPO_URL" | sed "s|https://|https://${GITHUB_TOKEN}@|")
+    # Configure git credential helper
+    git config --global credential.helper store
+    echo "https://picoclaw:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
+    chmod 600 ~/.git-credentials
     
     if [ ! -d "$OBSIDIAN_DIR/.git" ]; then
         echo "Cloning Obsidian vault..."
-        git clone "$AUTH_URL" "$OBSIDIAN_DIR" 2>&1 || {
+        git clone "$REPO_URL" "$OBSIDIAN_DIR" 2>&1 || {
             echo "Clone failed, trying to initialize and fetch..."
             mkdir -p "$OBSIDIAN_DIR"
             cd "$OBSIDIAN_DIR"
             git init
-            git remote add origin "$AUTH_URL"
+            git remote add origin "$REPO_URL"
             git fetch origin
             # Checkout whatever the default branch is
             DEFAULT_BRANCH=$(git branch -r | head -1 | sed 's/.*origin\///')
@@ -32,7 +34,7 @@ if [ -n "$GITHUB_TOKEN" ] && [ -n "$REPO_URL" ]; then
     else
         echo "Obsidian vault already exists, updating remote..."
         cd "$OBSIDIAN_DIR"
-        git remote set-url origin "$AUTH_URL"
+        git remote set-url origin "$REPO_URL"
     fi
 else
     echo "Warning: GITHUB_TOKEN or OBSIDIAN_REPO_URL not set, skipping Obsidian sync"
