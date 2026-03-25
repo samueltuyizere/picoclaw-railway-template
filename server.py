@@ -26,6 +26,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 from starlette.templating import Jinja2Templates
+import yaml
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 SECRET_FIELDS = {
@@ -36,6 +37,21 @@ SECRET_FIELDS = {
 
 CONFIG_DIR = Path(os.environ.get("PICOCLAW_HOME", Path.home() / ".picoclaw"))
 CONFIG_PATH = CONFIG_DIR / "config.json"
+SECURITY_PATH = CONFIG_DIR / ".security.yml"
+
+# Channel fields that must be written to .security.yml (Go gateway reads tokens
+# from there, not from config.json — the token field is unexported in Go).
+_CHANNEL_SECRET_FIELDS = {
+    "discord": ["token"],
+    "telegram": ["token"],
+    "slack": ["bot_token", "app_token"],
+    "feishu": ["app_secret", "encrypt_key", "verification_token"],
+    "dingtalk": ["client_secret"],
+    "qq": ["app_secret"],
+    "line": ["channel_secret", "channel_access_token"],
+    "weixin": ["token"],
+    "whatsapp": ["bridge_url"],
+}
 
 # Shared log buffer — used by both the logging handler and gateway subprocess reader
 LOG_BUFFER: deque[str] = deque(maxlen=2000)
@@ -127,9 +143,57 @@ def load_config():
         return default_config()
 
 
+def sync_security_config(config):
+    """Extract sensitive channel fields from config and write to .security.yml.
+
+    The Go gateway reads tokens from .security.yml (SecurityConfig), not from
+    config.json — the token field is an unexported Go struct field with no json
+    tag, so it can never be deserialized from JSON.  This function bridges that
+    gap by pulling secret values out of config.json and writing them to the YAML
+    file that the Go side actually reads.
+    """
+    channels = config.get("channels", {})
+    sec_channels = {}
+
+    for chan_name, secret_fields in _CHANNEL_SECRET_FIELDS.items():
+        chan_cfg = channels.get(chan_name, {})
+        if not isinstance(chan_cfg, dict):
+            continue
+        entry = {}
+        for field in secret_fields:
+            value = chan_cfg.get(field, "")
+            if value:
+                entry[field] = value
+        if entry:
+            sec_channels[chan_name] = entry
+
+    if not sec_channels:
+        return
+
+    # Merge with existing .security.yml so we don't clobber model_list keys etc.
+    existing_sec = {}
+    if SECURITY_PATH.exists():
+        try:
+            existing_sec = yaml.safe_load(SECURITY_PATH.read_text()) or {}
+        except Exception:
+            pass
+
+    if "channels" not in existing_sec:
+        existing_sec["channels"] = {}
+    for chan_name, entry in sec_channels.items():
+        if chan_name not in existing_sec["channels"]:
+            existing_sec["channels"][chan_name] = {}
+        existing_sec["channels"][chan_name].update(entry)
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    SECURITY_PATH.write_text(yaml.dump(existing_sec, default_flow_style=False, allow_unicode=True))
+    logging.info("Synced %d channel(s) to %s", len(sec_channels), SECURITY_PATH)
+
+
 def save_config(data):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(data, indent=2))
+    sync_security_config(data)
 
 
 def apply_env_overrides(config):
