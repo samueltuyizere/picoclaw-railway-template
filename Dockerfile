@@ -19,6 +19,7 @@ RUN apt-get update && \
 
 # Copy all PicoClaw binaries
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
+COPY --from=builder /src/build/picoclaw-launcher /usr/local/bin/picoclaw-launcher
 
 RUN mkdir -p /data/.picoclaw && echo "v2"
 
