@@ -1,7 +1,7 @@
 FROM golang:1.25-alpine AS builder
 
-# Force rebuild v3
-RUN apk add --no-cache git make nodejs npm
+# Rebuild v4 - complete launcher support
+RUN apk add --no-cache git make nodejs npm bash
 
 WORKDIR /src
 
