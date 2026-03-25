@@ -13,6 +13,10 @@ fi
 export PICOCLAW_HOME=/data/.picoclaw
 export PICOCLAW_GATEWAY_HOST=0.0.0.0
 
+# Use Railway's PORT if available, otherwise default to 18800
+LAUNCHER_PORT="${PORT:-18800}"
+
 # Start the launcher web console (includes gateway management)
-# Port 18800 is the web UI, port 18790 is the gateway
-exec picoclaw-launcher
+# -public flag makes it listen on 0.0.0.0 (required for Railway)
+# -port flag sets the port (Railway assigns dynamic PORT)
+exec picoclaw-launcher -public -port "$LAUNCHER_PORT"
