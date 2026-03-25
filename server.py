@@ -183,9 +183,14 @@ def apply_env_overrides(config):
         config["model_list"] = new_list
         logging.info("Applied %d model entries from env vars: %s", len(model_entries), list(model_entries.keys()))
 
-    # Default model_name
-    if "PICOCLAW_DEFAULT_MODEL_NAME" in os.environ:
-        config.setdefault("agents", {}).setdefault("defaults", {})["model_name"] = os.environ["PICOCLAW_DEFAULT_MODEL_NAME"]
+    # Default model_name and model (must match a model_name in model_list)
+    default_model_name = os.environ.get("PICOCLAW_DEFAULT_MODEL_NAME", "")
+    if default_model_name:
+        defaults = config.setdefault("agents", {}).setdefault("defaults", {})
+        defaults["model_name"] = default_model_name
+        # PicoClaw gateway expects 'model' to match a model_name in model_list
+        # Sync them to ensure consistency
+        defaults["model"] = default_model_name
 
     # Legacy provider overrides (kept for UI compatibility, will be transformed to model_list)
     legacy_prefix = "PICOCLAW_PROVIDER_"
@@ -402,6 +407,12 @@ class GatewayManager:
             channels_enabled = [name for name, cfg in resolved.get("channels", {}).items()
                                if isinstance(cfg, dict) and cfg.get("enabled")]
             logging.info("Channels enabled in resolved config: %s", channels_enabled or "none")
+            
+            # Debug: log the actual discord config being written
+            discord_cfg = resolved.get("channels", {}).get("discord", {})
+            logging.info("Discord config being written: enabled=%s, token=%s...", 
+                        discord_cfg.get("enabled"), 
+                        discord_cfg.get("token", "")[:10] + "..." if discord_cfg.get("token") else "empty")
             
             save_config(resolved)
             logging.info("Wrote resolved config to %s for gateway subprocess", CONFIG_PATH)
