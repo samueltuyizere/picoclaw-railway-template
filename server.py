@@ -216,6 +216,7 @@ def apply_env_overrides(config):
 
     # Channel overrides
     channel_prefix = "PICOCLAW_CHANNEL_"
+    applied_channels = []
     for key, value in os.environ.items():
         if not key.startswith(channel_prefix):
             continue
@@ -227,6 +228,7 @@ def apply_env_overrides(config):
 
         channels = config.get("channels", {})
         if channel_name not in channels:
+            logging.warning("Unknown channel '%s' in env var %s", channel_name, key)
             continue
 
         if field_name == "enabled":
@@ -237,6 +239,10 @@ def apply_env_overrides(config):
             parsed = value
 
         channels[channel_name][field_name] = parsed
+        applied_channels.append(f"{channel_name}.{field_name}")
+
+    if applied_channels:
+        logging.info("Applied channel env vars: %s", ", ".join(applied_channels))
 
     return config
 
