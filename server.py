@@ -160,6 +160,34 @@ def apply_env_overrides(config):
 
         providers[provider_name][field_name] = parsed
 
+    # Channel overrides: PICOCLAW_CHANNEL_<NAME>_<KEY>
+    # e.g. PICOCLAW_CHANNEL_TELEGRAM_ENABLED=true
+    #      PICOCLAW_CHANNEL_TELEGRAM_TOKEN=bot-token-here
+    #      PICOCLAW_CHANNEL_TELEGRAM_PROXY=socks5://...
+    #      PICOCLAW_CHANNEL_TELEGRAM_ALLOW_FROM=user1,user2
+    channel_prefix = "PICOCLAW_CHANNEL_"
+    for key, value in os.environ.items():
+        if not key.startswith(channel_prefix):
+            continue
+        rest = key[len(channel_prefix):]
+        parts = rest.split("_", 1)
+        if len(parts) != 2:
+            continue
+        channel_name, field_name = parts[0].lower(), parts[1].lower()
+
+        channels = config.get("channels", {})
+        if channel_name not in channels:
+            continue
+
+        if field_name == "enabled":
+            parsed = value.lower() in ("true", "1", "yes")
+        elif field_name == "allow_from":
+            parsed = [v.strip() for v in value.split(",") if v.strip()]
+        else:
+            parsed = value
+
+        channels[channel_name][field_name] = parsed
+
     # Agent defaults: PICOCLAW_DEFAULT_PROVIDER, PICOCLAW_DEFAULT_MODEL
     if "PICOCLAW_DEFAULT_PROVIDER" in os.environ:
         config.setdefault("agents", {}).setdefault("defaults", {})["provider"] = os.environ["PICOCLAW_DEFAULT_PROVIDER"]
