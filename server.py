@@ -159,6 +159,13 @@ def apply_env_overrides(config):
             parsed = value
 
         providers[provider_name][field_name] = parsed
+
+    # Agent defaults: PICOCLAW_DEFAULT_PROVIDER, PICOCLAW_DEFAULT_MODEL
+    if "PICOCLAW_DEFAULT_PROVIDER" in os.environ:
+        config.setdefault("agents", {}).setdefault("defaults", {})["provider"] = os.environ["PICOCLAW_DEFAULT_PROVIDER"]
+    if "PICOCLAW_DEFAULT_MODEL" in os.environ:
+        config.setdefault("agents", {}).setdefault("defaults", {})["model"] = os.environ["PICOCLAW_DEFAULT_MODEL"]
+
     return config
 
 
@@ -326,6 +333,19 @@ class GatewayManager:
                 _append_log("  Hint: exit code 137 usually means the process was killed (OOM or signal)")
             elif code == 1:
                 _append_log("  Hint: exit code 1 typically indicates a configuration or startup error")
+                if uptime == 0:
+                    config = load_config()
+                    provider = config.get("agents", {}).get("defaults", {}).get("provider", "")
+                    model = config.get("agents", {}).get("defaults", {}).get("model", "")
+                    if not provider:
+                        _append_log("  Likely cause: no default provider set (agents.defaults.provider is empty)")
+                        _append_log("  Fix: set PICOCLAW_DEFAULT_PROVIDER=openrouter in your environment")
+                    enabled = [n for n, p in config.get("providers", {}).items()
+                               if isinstance(p, dict) and p.get("enabled") and p.get("api_key")]
+                    if not enabled:
+                        _append_log("  Likely cause: no providers are enabled with API keys")
+                    _append_log(f"  Current config: provider={provider!r}, model={model!r}, "
+                                f"enabled_providers={enabled}")
             logging.error("Gateway process exited unexpectedly: code=%s uptime=%ds", code, uptime)
 
     def get_status(self) -> dict:
