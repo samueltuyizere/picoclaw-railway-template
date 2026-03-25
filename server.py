@@ -1,13 +1,16 @@
 import asyncio
 import base64
 import json
+import logging
 import os
 import re
 import secrets
 import signal
 import time
+import traceback
 from collections import deque
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -33,6 +36,41 @@ SECRET_FIELDS = {
 
 CONFIG_DIR = Path(os.environ.get("PICOCLAW_HOME", Path.home() / ".picoclaw"))
 CONFIG_PATH = CONFIG_DIR / "config.json"
+
+# Shared log buffer — used by both the logging handler and gateway subprocess reader
+LOG_BUFFER: deque[str] = deque(maxlen=2000)
+_log_lock = asyncio.Lock()
+
+
+def _ts() -> str:
+    """Return a UTC timestamp string for log lines."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _append_log(line: str):
+    """Thread-safe append to the shared log buffer."""
+    LOG_BUFFER.append(f"[{_ts()}] {line}")
+
+
+class _BufferLogHandler(logging.Handler):
+    """Pipe Python logging into the shared log buffer."""
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = self.format(record)
+            _append_log(msg)
+        except Exception:
+            pass
+
+
+# Set up root logger to capture server-level logs (config errors, startup, etc.)
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.DEBUG)
+_buffer_handler = _BufferLogHandler()
+_buffer_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+_root_logger.addHandler(_buffer_handler)
+# Reduce noise from third-party loggers
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -129,8 +167,10 @@ def load_config():
     if CONFIG_PATH.exists():
         try:
             config = json.loads(CONFIG_PATH.read_text())
-        except Exception:
-            pass
+        except json.JSONDecodeError as e:
+            logging.error("Config file %s is invalid JSON: %s", CONFIG_PATH, e)
+        except Exception as e:
+            logging.error("Failed to read config file %s: %s", CONFIG_PATH, e)
     return apply_env_overrides(config)
 
 
@@ -212,7 +252,6 @@ class GatewayManager:
     def __init__(self):
         self.process: asyncio.subprocess.Process | None = None
         self.state = "stopped"
-        self.logs: deque[str] = deque(maxlen=500)
         self.start_time: float | None = None
         self.restart_count = 0
         self._read_tasks: list[asyncio.Task] = []
@@ -221,6 +260,7 @@ class GatewayManager:
         if self.process and self.process.returncode is None:
             return
         self.state = "starting"
+        _append_log(f"Starting gateway (restart #{self.restart_count})...")
         try:
             self.process = await asyncio.create_subprocess_exec(
                 "picoclaw", "gateway",
@@ -229,23 +269,34 @@ class GatewayManager:
             )
             self.state = "running"
             self.start_time = time.time()
+            _append_log(f"Gateway started (pid={self.process.pid})")
             task = asyncio.create_task(self._read_output())
             self._read_tasks.append(task)
+        except FileNotFoundError:
+            self.state = "error"
+            _append_log("Failed to start gateway: 'picoclaw' command not found. "
+                        "Is picoclaw installed and in PATH?")
+            logging.error("'picoclaw' executable not found in PATH", stack_info=True)
         except Exception as e:
             self.state = "error"
-            self.logs.append(f"Failed to start gateway: {e}")
+            _append_log(f"Failed to start gateway: {type(e).__name__}: {e}")
+            logging.error("Failed to start gateway", exc_info=True)
 
     async def stop(self):
         if not self.process or self.process.returncode is not None:
             self.state = "stopped"
             return
         self.state = "stopping"
+        _append_log(f"Stopping gateway (pid={self.process.pid})...")
         self.process.terminate()
         try:
             await asyncio.wait_for(self.process.wait(), timeout=10)
+            _append_log("Gateway stopped gracefully")
         except asyncio.TimeoutError:
+            _append_log("Gateway did not stop in 10s, killing...")
             self.process.kill()
             await self.process.wait()
+            _append_log("Gateway killed")
         self.state = "stopped"
         self.start_time = None
 
@@ -262,12 +313,20 @@ class GatewayManager:
                     break
                 decoded = line.decode("utf-8", errors="replace").rstrip()
                 cleaned = ANSI_ESCAPE.sub("", decoded)
-                self.logs.append(cleaned)
+                if cleaned:
+                    LOG_BUFFER.append(f"[{_ts()}] {cleaned}")
         except asyncio.CancelledError:
             return
         if self.process and self.process.returncode is not None and self.state == "running":
+            code = self.process.returncode
+            uptime = int(time.time() - self.start_time) if self.start_time else 0
             self.state = "error"
-            self.logs.append(f"Gateway exited with code {self.process.returncode}")
+            _append_log(f"Gateway crashed with exit code {code} after {uptime}s")
+            if code == 137:
+                _append_log("  Hint: exit code 137 usually means the process was killed (OOM or signal)")
+            elif code == 1:
+                _append_log("  Hint: exit code 1 typically indicates a configuration or startup error")
+            logging.error("Gateway process exited unexpectedly: code=%s uptime=%ds", code, uptime)
 
     def get_status(self) -> dict:
         pid = None
@@ -369,7 +428,7 @@ async def api_logs(request: Request):
     auth_err = require_auth(request)
     if auth_err:
         return auth_err
-    return JSONResponse({"lines": list(gateway.logs)})
+    return JSONResponse({"lines": list(LOG_BUFFER)})
 
 
 async def api_gateway_start(request: Request):
@@ -398,13 +457,17 @@ async def api_gateway_restart(request: Request):
 
 async def auto_start_gateway():
     config = load_config()
-    has_key = False
-    for prov in config.get("providers", {}).values():
-        if isinstance(prov, dict) and prov.get("api_key"):
-            has_key = True
-            break
-    if has_key:
+    enabled_providers = []
+    for name, prov in config.get("providers", {}).items():
+        if isinstance(prov, dict) and prov.get("enabled") and prov.get("api_key"):
+            enabled_providers.append(name)
+    if enabled_providers:
+        _append_log(f"Auto-starting gateway with providers: {', '.join(enabled_providers)}")
+        logging.info("Auto-starting gateway with providers: %s", ", ".join(enabled_providers))
         asyncio.create_task(gateway.start())
+    else:
+        _append_log("Gateway not auto-started: no providers enabled with API keys configured")
+        logging.info("No enabled providers with API keys; skipping auto-start")
 
 
 routes = [
