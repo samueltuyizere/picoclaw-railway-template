@@ -1,4 +1,4 @@
-FROM golang:1.25.8-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Rebuild v4 - complete launcher support
 RUN apk add --no-cache git make nodejs npm bash
