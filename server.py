@@ -133,21 +133,66 @@ def save_config(data):
 
 
 def apply_env_overrides(config):
-    """Override provider settings from environment variables.
+    """Override config from environment variables.
 
-    Env vars follow the pattern: PICOCLAW_PROVIDER_<NAME>_<KEY>
-    e.g. PICOCLAW_PROVIDER_ANTHROPIC_API_KEY=key123
-         PICOCLAW_PROVIDER_OPENAI_ENABLED=true
-         PICOCLAW_PROVIDER_DEEPSEEK_API_BASE=http://...
+    Model configuration (recommended):
+        PICOCLAW_MODEL_<NAME>_MODEL = "openrouter/anthropic/claude-sonnet-4"
+        PICOCLAW_MODEL_<NAME>_API_KEY = "sk-..."
+        PICOCLAW_MODEL_<NAME>_API_BASE = "https://..." (optional)
+        PICOCLAW_DEFAULT_MODEL_NAME = "<NAME>"
+
+    Legacy provider format (kept for UI compatibility):
+        PICOCLAW_PROVIDER_<PROVIDER>_API_KEY = "sk-..."
+        PICOCLAW_PROVIDER_<PROVIDER>_API_BASE = "https://..."
+
+    Channel configuration:
+        PICOCLAW_CHANNEL_<NAME>_ENABLED = "true"
+        PICOCLAW_CHANNEL_<NAME>_TOKEN = "..."
+        PICOCLAW_CHANNEL_<NAME>_ALLOW_FROM = "user1,user2"
 
     Environment values always take precedence over config.json / API values.
     """
-    prefix = "PICOCLAW_PROVIDER_"
+    # Build model_list entries from PICOCLAW_MODEL_<NAME>_* env vars
+    model_entries = {}  # model_name -> entry dict
+    model_prefix = "PICOCLAW_MODEL_"
     for key, value in os.environ.items():
-        if not key.startswith(prefix):
+        if not key.startswith(model_prefix):
             continue
-        # Strip prefix and split into provider_name and field
-        rest = key[len(prefix):]  # e.g. "ANTHROPIC_API_KEY"
+        rest = key[len(model_prefix):]  # e.g. "OPENROUTER_MODEL" or "OPENROUTER_API_KEY"
+        parts = rest.split("_", 1)
+        if len(parts) != 2:
+            continue
+        model_name, field = parts[0].lower(), parts[1].lower()
+
+        if model_name not in model_entries:
+            model_entries[model_name] = {"model_name": model_name}
+
+        if field == "model":
+            model_entries[model_name]["model"] = value
+        elif field == "api_key":
+            model_entries[model_name]["api_key"] = value
+        elif field == "api_base":
+            model_entries[model_name]["api_base"] = value
+
+    # Merge into model_list (env entries take precedence, preserve existing non-env entries)
+    if model_entries:
+        existing_list = config.get("model_list", [])
+        existing_names = {e.get("model_name") for e in existing_list if e.get("model_name")}
+        new_list = [e for e in existing_list if e.get("model_name") not in model_entries]
+        new_list.extend(model_entries.values())
+        config["model_list"] = new_list
+        logging.info("Applied %d model entries from env vars: %s", len(model_entries), list(model_entries.keys()))
+
+    # Default model_name
+    if "PICOCLAW_DEFAULT_MODEL_NAME" in os.environ:
+        config.setdefault("agents", {}).setdefault("defaults", {})["model_name"] = os.environ["PICOCLAW_DEFAULT_MODEL_NAME"]
+
+    # Legacy provider overrides (kept for UI compatibility, will be transformed to model_list)
+    legacy_prefix = "PICOCLAW_PROVIDER_"
+    for key, value in os.environ.items():
+        if not key.startswith(legacy_prefix):
+            continue
+        rest = key[len(legacy_prefix):]
         parts = rest.split("_", 1)
         if len(parts) != 2:
             continue
@@ -155,9 +200,9 @@ def apply_env_overrides(config):
 
         providers = config.get("providers", {})
         if provider_name not in providers:
-            continue
+            providers[provider_name] = {}
+            config["providers"] = providers
 
-        # Parse booleans for "enabled" field
         if field_name == "enabled":
             parsed = value.lower() in ("true", "1", "yes")
         else:
@@ -165,11 +210,11 @@ def apply_env_overrides(config):
 
         providers[provider_name][field_name] = parsed
 
-    # Channel overrides: PICOCLAW_CHANNEL_<NAME>_<KEY>
-    # e.g. PICOCLAW_CHANNEL_TELEGRAM_ENABLED=true
-    #      PICOCLAW_CHANNEL_TELEGRAM_TOKEN=bot-token-here
-    #      PICOCLAW_CHANNEL_TELEGRAM_PROXY=socks5://...
-    #      PICOCLAW_CHANNEL_TELEGRAM_ALLOW_FROM=user1,user2
+    # Transform legacy providers with api_key into model_list entries
+    # This ensures the gateway subprocess has a valid model_list
+    _transform_providers_to_model_list(config)
+
+    # Channel overrides
     channel_prefix = "PICOCLAW_CHANNEL_"
     for key, value in os.environ.items():
         if not key.startswith(channel_prefix):
@@ -193,13 +238,59 @@ def apply_env_overrides(config):
 
         channels[channel_name][field_name] = parsed
 
-    # Agent defaults: PICOCLAW_DEFAULT_PROVIDER, PICOCLAW_DEFAULT_MODEL
-    if "PICOCLAW_DEFAULT_PROVIDER" in os.environ:
-        config.setdefault("agents", {}).setdefault("defaults", {})["provider"] = os.environ["PICOCLAW_DEFAULT_PROVIDER"]
-    if "PICOCLAW_DEFAULT_MODEL" in os.environ:
-        config.setdefault("agents", {}).setdefault("defaults", {})["model"] = os.environ["PICOCLAW_DEFAULT_MODEL"]
-
     return config
+
+
+def _transform_providers_to_model_list(config):
+    """Transform legacy providers with api_key into model_list entries.
+
+    This bridges the UI's provider-centric view with picoclaw's model_list schema.
+    """
+    providers = config.get("providers", {})
+    model_list = config.get("model_list", [])
+    existing_names = {e.get("model_name") for e in model_list if e.get("model_name")}
+
+    for prov_name, prov_cfg in providers.items():
+        if not isinstance(prov_cfg, dict):
+            continue
+        api_key = prov_cfg.get("api_key", "")
+        if not api_key or prov_cfg.get("enabled") is False:
+            continue
+        if prov_name in existing_names:
+            continue
+
+        # Build model entry from provider
+        model_spec = f"{prov_name}/default"  # Will need user to specify actual model
+        if prov_name == "openrouter":
+            model_spec = "openrouter/anthropic/claude-sonnet-4"  # Sensible default
+        elif prov_name == "openai":
+            model_spec = "openai/gpt-4o"
+        elif prov_name == "anthropic":
+            model_spec = "anthropic/claude-sonnet-4"
+        elif prov_name == "deepseek":
+            model_spec = "deepseek/deepseek-chat"
+        elif prov_name == "gemini":
+            model_spec = "gemini/gemini-2.0-flash"
+        elif prov_name == "groq":
+            model_spec = "groq/llama-3.3-70b-versatile"
+        elif prov_name == "zhipu":
+            model_spec = "zhipu/glm-4"
+        elif prov_name == "moonshot":
+            model_spec = "moonshot/moonshot-v1-8k"
+
+        entry = {
+            "model_name": prov_name,
+            "model": model_spec,
+            "api_key": api_key,
+        }
+        if prov_cfg.get("api_base"):
+            entry["api_base"] = prov_cfg["api_base"]
+
+        model_list.append(entry)
+        logging.info("Transformed provider '%s' to model_list entry: %s", prov_name, model_spec)
+
+    if model_list:
+        config["model_list"] = model_list
 
 
 def load_config():
@@ -220,13 +311,13 @@ def default_config():
             "defaults": {
                 "workspace": "~/.picoclaw/workspace",
                 "restrict_to_workspace": True,
-                "provider": "",
-                "model": "glm-4.7",
+                "model_name": "",
                 "max_tokens": 8192,
                 "temperature": 0.7,
                 "max_tool_iterations": 20,
             }
         },
+        "model_list": [],
         "channels": {
             "telegram": {"enabled": False, "token": "", "proxy": "", "allow_from": []},
             "discord": {"enabled": False, "token": "", "allow_from": []},
@@ -235,10 +326,11 @@ def default_config():
             "feishu": {"enabled": False, "app_id": "", "app_secret": "", "encrypt_key": "", "verification_token": "", "allow_from": []},
             "dingtalk": {"enabled": False, "client_id": "", "client_secret": "", "allow_from": []},
             "qq": {"enabled": False, "app_id": "", "app_secret": "", "allow_from": []},
-            "line": {"enabled": False, "channel_secret": "", "channel_access_token": "", "webhook_host": "0.0.0.0", "webhook_port": 18791, "webhook_path": "/webhook/line", "allow_from": []},
+            "line": {"enabled": False, "channel_secret": "", "channel_access_token": "", "webhook_path": "/webhook/line", "allow_from": []},
             "maixcam": {"enabled": False, "host": "0.0.0.0", "port": 18790, "allow_from": []},
         },
         "providers": {
+            # Legacy section kept for UI compatibility; transformed to model_list for gateway
             "anthropic": {"enabled": False, "api_key": ""},
             "openai": {"enabled": False, "api_key": "", "api_base": ""},
             "openrouter": {"enabled": False, "api_key": ""},
@@ -250,7 +342,7 @@ def default_config():
             "nvidia": {"enabled": False, "api_key": "", "api_base": ""},
             "moonshot": {"enabled": False, "api_key": ""},
         },
-        "gateway": {"host": "0.0.0.0", "port": 18790},
+        "gateway": {"host": "0.0.0.0", "port": 18790, "log_level": "fatal"},
         "tools": {
             "web": {
                 "brave": {"enabled": False, "api_key": "", "max_results": 5},
@@ -383,17 +475,15 @@ class GatewayManager:
                 _append_log("  Hint: exit code 1 typically indicates a configuration or startup error")
                 if uptime == 0:
                     config = load_config()
-                    provider = config.get("agents", {}).get("defaults", {}).get("provider", "")
-                    model = config.get("agents", {}).get("defaults", {}).get("model", "")
-                    if not provider:
-                        _append_log("  Likely cause: no default provider set (agents.defaults.provider is empty)")
-                        _append_log("  Fix: set PICOCLAW_DEFAULT_PROVIDER=openrouter in your environment")
-                    enabled = [n for n, p in config.get("providers", {}).items()
-                               if isinstance(p, dict) and p.get("enabled") and p.get("api_key")]
-                    if not enabled:
-                        _append_log("  Likely cause: no providers are enabled with API keys")
-                    _append_log(f"  Current config: provider={provider!r}, model={model!r}, "
-                                f"enabled_providers={enabled}")
+                    model_name = config.get("agents", {}).get("defaults", {}).get("model_name", "")
+                    model_list = config.get("model_list", [])
+                    if not model_name:
+                        _append_log("  Likely cause: no model_name set (agents.defaults.model_name is empty)")
+                        _append_log("  Fix: set PICOCLAW_DEFAULT_MODEL_NAME=openrouter in your environment")
+                    if not model_list:
+                        _append_log("  Likely cause: model_list is empty (no models configured)")
+                    model_names = [e.get("model_name") for e in model_list]
+                    _append_log(f"  Current config: model_name={model_name!r}, model_list={model_names}")
             logging.error("Gateway process exited unexpectedly: code=%s uptime=%ds", code, uptime)
 
     def get_status(self) -> dict:
@@ -467,10 +557,20 @@ async def api_status(request: Request):
 
     config = load_config()
 
+    # Build providers status from model_list (preferred) + legacy providers
     providers = {}
+    for entry in config.get("model_list", []):
+        name = entry.get("model_name", "unknown")
+        providers[name] = {
+            "enabled": True,
+            "configured": bool(entry.get("api_key")),
+            "model": entry.get("model", ""),
+        }
     for name, prov in config.get("providers", {}).items():
-        providers[name] = {"enabled": prov.get("enabled", False), "configured": bool(prov.get("api_key"))}
+        if name not in providers:
+            providers[name] = {"enabled": prov.get("enabled", False), "configured": bool(prov.get("api_key"))}
 
+    model_name = config.get("agents", {}).get("defaults", {}).get("model_name", "")
     channels = {}
     for name, chan in config.get("channels", {}).items():
         channels[name] = {"enabled": chan.get("enabled", False)}
@@ -525,17 +625,21 @@ async def api_gateway_restart(request: Request):
 
 async def auto_start_gateway():
     config = load_config()
-    enabled_providers = []
-    for name, prov in config.get("providers", {}).items():
-        if isinstance(prov, dict) and prov.get("enabled") and prov.get("api_key"):
-            enabled_providers.append(name)
-    if enabled_providers:
-        _append_log(f"Auto-starting gateway with providers: {', '.join(enabled_providers)}")
-        logging.info("Auto-starting gateway with providers: %s", ", ".join(enabled_providers))
+    model_list = config.get("model_list", [])
+    model_name = config.get("agents", {}).get("defaults", {}).get("model_name", "")
+    if model_list and model_name:
+        model_names = [e.get("model_name") for e in model_list if e.get("model_name")]
+        _append_log(f"Auto-starting gateway with model_name={model_name!r}, models: {model_names}")
+        logging.info("Auto-starting gateway: model_name=%s, models=%s", model_name, model_names)
         asyncio.create_task(gateway.start())
     else:
-        _append_log("Gateway not auto-started: no providers enabled with API keys configured")
-        logging.info("No enabled providers with API keys; skipping auto-start")
+        reasons = []
+        if not model_list:
+            reasons.append("model_list is empty")
+        if not model_name:
+            reasons.append("model_name not set")
+        _append_log(f"Gateway not auto-started: {', '.join(reasons)}")
+        logging.info("Skipping auto-start: %s", ", ".join(reasons))
 
 
 routes = [
