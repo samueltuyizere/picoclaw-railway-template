@@ -89,6 +89,51 @@ def save_config(data):
     CONFIG_PATH.write_text(json.dumps(data, indent=2))
 
 
+def apply_env_overrides(config):
+    """Override provider settings from environment variables.
+
+    Env vars follow the pattern: PICOCLAW_PROVIDER_<NAME>_<KEY>
+    e.g. PICOCLAW_PROVIDER_ANTHROPIC_API_KEY=key123
+         PICOCLAW_PROVIDER_OPENAI_ENABLED=true
+         PICOCLAW_PROVIDER_DEEPSEEK_API_BASE=http://...
+
+    Environment values always take precedence over config.json / API values.
+    """
+    prefix = "PICOCLAW_PROVIDER_"
+    for key, value in os.environ.items():
+        if not key.startswith(prefix):
+            continue
+        # Strip prefix and split into provider_name and field
+        rest = key[len(prefix):]  # e.g. "ANTHROPIC_API_KEY"
+        parts = rest.split("_", 1)
+        if len(parts) != 2:
+            continue
+        provider_name, field_name = parts[0].lower(), parts[1].lower()
+
+        providers = config.get("providers", {})
+        if provider_name not in providers:
+            continue
+
+        # Parse booleans for "enabled" field
+        if field_name == "enabled":
+            parsed = value.lower() in ("true", "1", "yes")
+        else:
+            parsed = value
+
+        providers[provider_name][field_name] = parsed
+    return config
+
+
+def load_config():
+    config = default_config()
+    if CONFIG_PATH.exists():
+        try:
+            config = json.loads(CONFIG_PATH.read_text())
+        except Exception:
+            pass
+    return apply_env_overrides(config)
+
+
 def default_config():
     return {
         "agents": {
@@ -114,16 +159,16 @@ def default_config():
             "maixcam": {"enabled": False, "host": "0.0.0.0", "port": 18790, "allow_from": []},
         },
         "providers": {
-            "anthropic": {"api_key": ""},
-            "openai": {"api_key": "", "api_base": ""},
-            "openrouter": {"api_key": ""},
-            "deepseek": {"api_key": ""},
-            "groq": {"api_key": ""},
-            "gemini": {"api_key": ""},
-            "zhipu": {"api_key": "", "api_base": ""},
-            "vllm": {"api_key": "", "api_base": ""},
-            "nvidia": {"api_key": "", "api_base": ""},
-            "moonshot": {"api_key": ""},
+            "anthropic": {"enabled": False, "api_key": ""},
+            "openai": {"enabled": False, "api_key": "", "api_base": ""},
+            "openrouter": {"enabled": False, "api_key": ""},
+            "deepseek": {"enabled": False, "api_key": ""},
+            "groq": {"enabled": False, "api_key": ""},
+            "gemini": {"enabled": False, "api_key": ""},
+            "zhipu": {"enabled": False, "api_key": "", "api_base": ""},
+            "vllm": {"enabled": False, "api_key": "", "api_base": ""},
+            "nvidia": {"enabled": False, "api_key": "", "api_base": ""},
+            "moonshot": {"enabled": False, "api_key": ""},
         },
         "gateway": {"host": "0.0.0.0", "port": 18790},
         "tools": {
@@ -297,7 +342,7 @@ async def api_status(request: Request):
 
     providers = {}
     for name, prov in config.get("providers", {}).items():
-        providers[name] = {"configured": bool(prov.get("api_key"))}
+        providers[name] = {"enabled": prov.get("enabled", False), "configured": bool(prov.get("api_key"))}
 
     channels = {}
     for name, chan in config.get("channels", {}).items():
