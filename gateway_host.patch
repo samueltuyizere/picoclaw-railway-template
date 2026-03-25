@@ -1,20 +1,15 @@
 --- a/web/backend/api/gateway_host.go
 +++ b/web/backend/api/gateway_host.go
-@@ -85,9 +85,16 @@ func requestWSScheme(r *http.Request) string {
- }
- 
- func (h *Handler) buildWsURL(r *http.Request, cfg *config.Config) string {
- 	host := h.effectiveGatewayBindHost(cfg)
+@@ -87,6 +87,12 @@ func (h *Handler) buildWsURL(r *http.Request, cfg *config.Config) string {
  	if host == "" || host == "0.0.0.0" {
  		host = requestHostName(r)
  	}
-+
 +	// When behind a reverse proxy (X-Forwarded-Proto set), don't include port
-+	// Reverse proxies like Railway route traffic through standard ports (443 for wss)
 +	if r.Header.Get("X-Forwarded-Proto") != "" {
 +		return requestWSScheme(r) + "://" + host + "/pico/ws"
 +	}
 +
++	// Original comment continues
  	// Use web server port instead of gateway port to avoid exposing extra ports
  	// The WebSocket connection will be proxied by the backend to the gateway
  	wsPort := h.serverPort

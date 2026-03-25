@@ -12,7 +12,7 @@ RUN git clone --depth 1 --branch ${PICOCLAW_VERSION} https://github.com/samueltu
 # Patch the launcher to not include port in WebSocket URL when behind reverse proxy
 # This fixes Railway 502 errors on WebSocket connections
 COPY gateway_host.patch /tmp/gateway_host.patch
-RUN patch -p1 < /tmp/gateway_host.patch || true
+RUN cd /src && patch -p1 < /tmp/gateway_host.patch
 
 RUN go mod download
 RUN make build
