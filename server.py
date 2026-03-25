@@ -295,8 +295,10 @@ def apply_env_overrides(config):
         channel_name, field_name = parts[0].lower(), parts[1].lower()
 
         channels = config.get("channels", {})
+        # Create channel entry if it doesn't exist (so env vars can enable new channels)
         if channel_name not in channels:
-            continue
+            channels[channel_name] = {}
+            config["channels"] = channels
 
         if field_name == "enabled":
             parsed = value.lower() in ("true", "1", "yes")
@@ -306,6 +308,11 @@ def apply_env_overrides(config):
             parsed = value
 
         channels[channel_name][field_name] = parsed
+        logging.info("Applied env override: channels.%s.%s = %s", channel_name, field_name, 
+                     "***" if field_name in SECRET_FIELDS else repr(parsed)[:50])
+
+    # Sync secrets to .security.yml so Go gateway can read them
+    sync_security_config(config)
 
     return config
 
