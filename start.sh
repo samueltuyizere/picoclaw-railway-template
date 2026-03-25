@@ -76,6 +76,13 @@ fi
 
 sync_channel_env_to_security
 
+# Start Obsidian vault sync (background process)
+if [ -n "$GITHUB_TOKEN" ] && [ -n "$OBSIDIAN_REPO_URL" ]; then
+    echo "Starting Obsidian vault sync..."
+    /app/obsidian-sync.sh &
+    OBSIDIAN_SYNC_PID=$!
+fi
+
 # Set up HTTP Basic Auth for the web UI
 # Uses AUTH_USERNAME and AUTH_PASSWORD env vars (defaults provided)
 AUTH_USER="${AUTH_USERNAME:-admin}"
@@ -124,7 +131,7 @@ nginx -g 'daemon off;' &
 NGINX_PID=$!
 
 # Handle shutdown gracefully
-trap "kill $LAUNCHER_PID $NGINX_PID 2>/dev/null; exit 0" SIGTERM SIGINT
+trap "kill $LAUNCHER_PID $NGINX_PID ${OBSIDIAN_SYNC_PID:-} 2>/dev/null; exit 0" SIGTERM SIGINT
 
 # Wait for either process to exit
 wait -n $LAUNCHER_PID $NGINX_PID

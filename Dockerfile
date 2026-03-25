@@ -21,7 +21,7 @@ RUN make build-launcher
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl nginx apache2-utils iproute2 procps && \
+    apt-get install -y --no-install-recommends ca-certificates curl nginx apache2-utils iproute2 procps git openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy all PicoClaw binaries
@@ -30,6 +30,10 @@ COPY --from=builder /src/build/picoclaw-launcher /usr/local/bin/picoclaw-launche
 
 # Copy nginx config template
 COPY nginx.conf /etc/nginx/nginx.conf.template
+
+# Copy Obsidian sync script
+COPY obsidian-sync.sh /app/obsidian-sync.sh
+RUN chmod +x /app/obsidian-sync.sh
 
 RUN mkdir -p /data/.picoclaw && echo "v2"
 
