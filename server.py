@@ -403,6 +403,12 @@ class GatewayManager:
             # Write the resolved config (with env overrides) to disk so the
             # gateway subprocess can read it — it doesn't share our memory.
             resolved = load_config()
+            
+            # Log channel status before saving
+            channels_enabled = [name for name, cfg in resolved.get("channels", {}).items()
+                               if isinstance(cfg, dict) and cfg.get("enabled")]
+            logging.info("Channels enabled in resolved config: %s", channels_enabled or "none")
+            
             save_config(resolved)
             logging.info("Wrote resolved config to %s for gateway subprocess", CONFIG_PATH)
 
