@@ -21,7 +21,7 @@ RUN make build-launcher
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl nginx apache2-utils && \
+    apt-get install -y --no-install-recommends ca-certificates curl nginx apache2-utils iproute2 procps && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy all PicoClaw binaries

@@ -100,7 +100,15 @@ sed "s/listen 8080;/listen $NGINX_PORT;/" /etc/nginx/nginx.conf.template > /etc/
 
 # Kill any existing launcher process on port 18800
 pkill -f "picoclaw-launcher" 2>/dev/null || true
-sleep 1
+
+# Wait for port to be free (handle rapid container restarts)
+for i in $(seq 1 10); do
+    if ! ss -tln | grep -q ":18800 "; then
+        break
+    fi
+    echo "Waiting for port 18800 to be free... ($i/10)"
+    sleep 1
+done
 
 # Start the launcher on localhost only (nginx proxies to it)
 picoclaw-launcher -port 18800 &
